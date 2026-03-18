@@ -17,7 +17,7 @@ from datetime import datetime
 # ---------------------------------------------------------------------------
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 PORT = 9000
-SERVICE_NAME = "OmibudOCR"
+SERVICE_NAME = "OmnibudOCR"
 LOG_FILE = os.path.join(os.path.dirname(__file__), "deploy.log")
 
 # ---------------------------------------------------------------------------
