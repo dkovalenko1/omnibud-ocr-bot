@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.iml
