@@ -67,6 +67,10 @@ WEBHOOK_SECRET=<той самий секрет що в GitHub webhook>
 ```powershell
 cd C:\Apps\OmibudOCR
 python -m venv .venv
+
+# Якщо PowerShell блокує activate — виконайте один раз як адміністратор:
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```

@@ -114,7 +114,6 @@ if __name__ == "__main__":
     try:
         from dotenv import load_dotenv
         load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-        global WEBHOOK_SECRET
         WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", WEBHOOK_SECRET)
     except ImportError:
         pass
