@@ -48,11 +48,21 @@ def main():
     signal.signal(signal.SIGTERM, on_shutdown)
     signal.signal(signal.SIGBREAK, on_shutdown)
 
-    # Wait for internet before sending startup message
-    while not is_internet_up():
-        time.sleep(5)
+    # Only notify on actual PC boot, not service restarts
+    # Check Windows uptime — if less than 3 minutes, it's a real boot
+    uptime_result = subprocess.run(
+        ["powershell", "-Command", "(Get-Date) - (gcim Win32_OperatingSystem).LastBootUpTime | Select-Object -ExpandProperty TotalSeconds"],
+        capture_output=True, text=True
+    )
+    try:
+        uptime_seconds = float(uptime_result.stdout.strip())
+    except ValueError:
+        uptime_seconds = 999
 
-    notify("PC started — OmibudOCR system is online")
+    if uptime_seconds < 180:
+        while not is_internet_up():
+            time.sleep(5)
+        notify("PC started — OmibudOCR system is online")
 
     internet_was_up = True
     service_states = {s: get_service_status(s) for s in SERVICES}

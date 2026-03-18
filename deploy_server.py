@@ -96,9 +96,6 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
 
         changed_files = out
 
-        # Restart all services including self (delayed so response is sent first)
-        _run(["nssm", "restart", "OmibudWatchdog"])
-
         log.info("Changes detected — restarting service %s", SERVICE_NAME)
         code, out = _run(["nssm", "restart", SERVICE_NAME])
         log.info("nssm restart (exit %d): %s", code, out)
@@ -107,9 +104,9 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
             log.info("Deploy successful")
             notify(f"Deploy successful — {SERVICE_NAME} restarted\n{changed_files}")
             self._respond(200, "Deployed")
-            # Restart self after response is sent
+            # Restart watchdog and self after response is sent
             subprocess.Popen(
-                ["powershell", "-Command", "Start-Sleep 3; nssm restart OmibudDeploy"],
+                ["powershell", "-Command", "Start-Sleep 3; nssm restart OmibudWatchdog; nssm restart OmibudDeploy"],
                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
             )
         else:
