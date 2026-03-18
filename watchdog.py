@@ -21,6 +21,16 @@ SERVICES = ["OmnibudOCR", "OmibudDeploy", "NgrokTunnel"]
 CHECK_INTERVAL = 30  # seconds
 INTERNET_CHECK_URL = "https://www.google.com"
 INTERNET_TIMEOUT = 5
+DEPLOY_FLAG = os.path.join(os.path.dirname(__file__), ".last_deploy")
+DEPLOY_SILENCE = 60  # seconds to suppress alerts after a deploy
+
+
+def recent_deploy() -> bool:
+    try:
+        ts = float(open(DEPLOY_FLAG).read())
+        return (time.time() - ts) < DEPLOY_SILENCE
+    except Exception:
+        return False
 
 
 def is_internet_up() -> bool:
@@ -83,9 +93,9 @@ def main():
             is_running = get_service_status(service)
             was_running = service_states[service]
 
-            if was_running and not is_running:
+            if was_running and not is_running and not recent_deploy():
                 notify(f"SERVICE CRASHED: {service} is down on TANYA-PC")
-            elif not was_running and is_running:
+            elif not was_running and is_running and not recent_deploy():
                 notify(f"Service recovered: {service} is back up")
 
             service_states[service] = is_running

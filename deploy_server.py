@@ -94,15 +94,25 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, "No changes")
             return
 
-        changed_files = out
+        # Extract only changed file names from git output
+        changed_files = "\n".join(
+            line.strip().split("|")[0].strip()
+            for line in out.splitlines()
+            if "|" in line
+        )
 
         log.info("Changes detected — restarting service %s", SERVICE_NAME)
+
+        # Write deploy timestamp so watchdog ignores imminent restarts
+        with open(os.path.join(os.path.dirname(__file__), ".last_deploy"), "w") as f:
+            f.write(str(datetime.now().timestamp()))
+
         code, out = _run(["nssm", "restart", SERVICE_NAME])
         log.info("nssm restart (exit %d): %s", code, out)
 
         if code == 0:
             log.info("Deploy successful")
-            notify(f"Deploy successful — {SERVICE_NAME} restarted\n{changed_files}")
+            notify(f"Deploy successful\n{changed_files}")
             self._respond(200, "Deployed")
             # Restart watchdog and self after response is sent
             subprocess.Popen(
@@ -132,6 +142,5 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
 if __name__ == "__main__":
     server = http.server.HTTPServer(("localhost", PORT), DeployHandler)
     log.info("Deploy server started on localhost:%d", PORT)
-    notify("Deploy server started")
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Deploy server listening on localhost:{PORT}")
     server.serve_forever()
