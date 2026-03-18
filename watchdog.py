@@ -1,16 +1,19 @@
 """
 Watchdog — monitors services and internet, sends Telegram alerts on events:
-- PC restarted (startup message)
+- PC started
+- PC shutting down
 - Internet lost / restored
-- Service crashed
+- Service crashed / recovered
 Run as NSSM service: OmibudWatchdog
 """
 
+import signal
 import subprocess
-import time
-import urllib.request
 import sys
 import os
+import time
+import urllib.request
+
 sys.path.insert(0, os.path.dirname(__file__))
 from notify import send as notify
 
@@ -36,10 +39,22 @@ def get_service_status(name: str) -> bool:
     return "SERVICE_RUNNING" in result.stdout
 
 
+def on_shutdown(signum, frame):
+    notify("PC is shutting down — OmibudOCR going offline")
+    sys.exit(0)
+
+
 def main():
+    signal.signal(signal.SIGTERM, on_shutdown)
+    signal.signal(signal.SIGBREAK, on_shutdown)
+
+    # Wait for internet before sending startup message
+    while not is_internet_up():
+        time.sleep(5)
+
     notify("PC started — OmibudOCR system is online")
 
-    internet_was_up = is_internet_up()
+    internet_was_up = True
     service_states = {s: get_service_status(s) for s in SERVICES}
 
     while True:
