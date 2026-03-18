@@ -116,8 +116,8 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, "Deployed")
             # Restart watchdog and self after response is sent
             subprocess.Popen(
-                ["powershell", "-Command", "Start-Sleep 3; nssm restart OmibudWatchdog; nssm restart OmibudDeploy"],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                'cmd /c "ping -n 4 127.0.0.1 >nul && nssm restart OmibudWatchdog && nssm restart OmibudDeploy"',
+                shell=True, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
             )
         else:
             log.error("Service restart failed")
