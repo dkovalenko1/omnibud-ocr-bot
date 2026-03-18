@@ -11,6 +11,9 @@ import logging
 import os
 import subprocess
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 # ---------------------------------------------------------------------------
 # Configuration — set WEBHOOK_SECRET in environment or .env before running
@@ -30,6 +33,11 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+from notify import send as notify
 
 
 def _verify_signature(body: bytes, sig_header: str) -> bool:
@@ -76,6 +84,8 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
         log.info("git pull (exit %d): %s", code, out)
 
         if code != 0:
+            log.error("git pull failed")
+            notify(f"Deploy FAILED — git pull error:\n{out}")
             self._respond(500, "git pull failed")
             return
 
@@ -90,8 +100,11 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
 
         if code == 0:
             log.info("Deploy successful")
+            notify(f"Deploy successful — {SERVICE_NAME} restarted")
             self._respond(200, "Deployed")
         else:
+            log.error("Service restart failed")
+            notify(f"Deploy FAILED — could not restart {SERVICE_NAME}:\n{out}")
             self._respond(500, "Service restart failed")
 
     def do_GET(self):
@@ -110,15 +123,8 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    # Load .env if present (python-dotenv is already a dependency)
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-        WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", WEBHOOK_SECRET)
-    except ImportError:
-        pass
-
     server = http.server.HTTPServer(("localhost", PORT), DeployHandler)
     log.info("Deploy server started on localhost:%d", PORT)
+    notify("Deploy server started")
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Deploy server listening on localhost:{PORT}")
     server.serve_forever()

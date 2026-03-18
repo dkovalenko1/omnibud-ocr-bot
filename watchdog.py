@@ -1,36 +1,34 @@
 """
-Watchdog — checks services every 5 minutes and sends Telegram alert if anything is down.
+Watchdog — monitors services and internet, sends Telegram alerts on events:
+- PC restarted (startup message)
+- Internet lost / restored
+- Service crashed
 Run as NSSM service: OmibudWatchdog
 """
 
-import os
 import subprocess
 import time
 import urllib.request
-import urllib.parse
-from dotenv import load_dotenv
-
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
-CHECK_INTERVAL = 300  # seconds
+import sys
+import os
+sys.path.insert(0, os.path.dirname(__file__))
+from notify import send as notify
 
 SERVICES = ["OmnibudOCR", "OmibudDeploy", "NgrokTunnel"]
+CHECK_INTERVAL = 30  # seconds
+INTERNET_CHECK_URL = "https://www.google.com"
+INTERNET_TIMEOUT = 5
 
 
-def send_telegram(message: str):
-    if not TELEGRAM_TOKEN or not ADMIN_CHAT_ID:
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = urllib.parse.urlencode({"chat_id": ADMIN_CHAT_ID, "text": message}).encode()
+def is_internet_up() -> bool:
     try:
-        urllib.request.urlopen(url, data=data, timeout=10)
+        urllib.request.urlopen(INTERNET_CHECK_URL, timeout=INTERNET_TIMEOUT)
+        return True
     except Exception:
-        pass
+        return False
 
 
-def check_service(name: str) -> bool:
+def get_service_status(name: str) -> bool:
     result = subprocess.run(
         ["nssm", "status", name],
         capture_output=True, text=True
@@ -39,13 +37,33 @@ def check_service(name: str) -> bool:
 
 
 def main():
-    send_telegram("Watchdog started — monitoring OmibudOCR services")
+    notify("PC started — OmibudOCR system is online")
+
+    internet_was_up = is_internet_up()
+    service_states = {s: get_service_status(s) for s in SERVICES}
 
     while True:
-        for service in SERVICES:
-            if not check_service(service):
-                send_telegram(f"WARNING: {service} is NOT running on TANYA-PC")
         time.sleep(CHECK_INTERVAL)
+
+        # Check internet
+        internet_now = is_internet_up()
+        if internet_was_up and not internet_now:
+            notify("Internet connection LOST on TANYA-PC")
+        elif not internet_was_up and internet_now:
+            notify("Internet connection RESTORED on TANYA-PC")
+        internet_was_up = internet_now
+
+        # Check services
+        for service in SERVICES:
+            is_running = get_service_status(service)
+            was_running = service_states[service]
+
+            if was_running and not is_running:
+                notify(f"SERVICE CRASHED: {service} is down on TANYA-PC")
+            elif not was_running and is_running:
+                notify(f"Service recovered: {service} is back up")
+
+            service_states[service] = is_running
 
 
 if __name__ == "__main__":
