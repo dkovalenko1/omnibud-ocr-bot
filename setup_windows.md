@@ -7,6 +7,39 @@
 
 ---
 
+## 0. Встановлення Python та Git
+
+### Python
+
+1. Завантажте інсталятор: https://www.python.org/downloads/windows/
+   - Оберіть **Python 3.11.x** або новіший → `Windows installer (64-bit)`
+2. Запустіть інсталятор:
+   - ✓ **Add python.exe to PATH** (обов'язково!)
+   - Натисніть **Install Now**
+3. Перевірте в PowerShell:
+   ```powershell
+   python --version
+   # Python 3.11.x
+   ```
+
+### Git
+
+1. Завантажте інсталятор: https://git-scm.com/download/win
+2. Запустіть, всі налаштування залиште за замовчуванням
+3. На кроці **"Adjusting your PATH"** оберіть **Git from the command line and also from 3rd-party software**
+4. Перевірте в PowerShell:
+   ```powershell
+   git --version
+   # git version 2.x.x
+   ```
+5. Налаштуйте identity:
+   ```powershell
+   git config --global user.name "Your Name"
+   git config --global user.email "you@example.com"
+   ```
+
+---
+
 ## 1. Клонування репозиторію
 
 ```powershell
@@ -52,15 +85,16 @@ C:\Tools\nssm\win64\nssm.exe install OmibudOCR
 ```
 
 У GUI вкажіть:
+
 | Поле | Значення |
 |------|----------|
 | Path | `C:\Apps\OmibudOCR\.venv\Scripts\python.exe` |
 | Startup directory | `C:\Apps\OmibudOCR` |
 | Arguments | `bot.py` |
 
-Вкладка **Details**: Display name = `OmibudOCR Bot`
-Вкладка **Log on**: Local System
-Вкладка **Exit actions**: Restart on crash, delay 5 sec
+- Вкладка **Details**: Display name = `OmibudOCR Bot`
+- Вкладка **Log on**: Local System
+- Вкладка **Exit actions**: Restart on crash, delay 5 sec
 
 Або через командний рядок:
 ```powershell
