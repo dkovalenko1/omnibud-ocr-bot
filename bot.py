@@ -477,7 +477,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3. Підпис можна написати окремим повідомленням одразу після фото\n"
         "4. Я розпізнаю дані та покажу рядок для Excel\n"
         "5. Перевір результат — натисни ✅ *Зберегти* або 🔄 *Повторити розпізнавання*\n\n"
-        "test 3"
+        "test 4"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
