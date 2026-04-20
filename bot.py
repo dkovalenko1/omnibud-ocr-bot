@@ -333,44 +333,7 @@ def build_excel_string(data: dict) -> str:
     return result
 
 
-def _sanitize_copy_field(value: object) -> str:
-    text = str(value or "")
-    text = text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
-    text = text.replace("`", "'")
-    return " ".join(text.split())
-
-
-def _format_copy_number(value: object) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return _sanitize_copy_field(value)
-
-    if number.is_integer():
-        return str(int(number))
-
-    return f"{number:.2f}".rstrip("0").rstrip(".").replace(".", ",")
-
-
-def build_copy_payload(receipts: list, message_date: datetime) -> list[str]:
-    date_str = message_date.strftime("%d.%m.%Y")
-    rows = []
-
-    for data in receipts:
-        total = data.get("total") or 0
-        row = "\t".join([
-            _sanitize_copy_field(build_excel_string(data)),
-            date_str,
-            "1",
-            _format_copy_number(total),
-            _format_copy_number(total),
-        ])
-        rows.append(row)
-
-    return rows
-
-
-def build_preview_message(receipts: list, message_date: datetime) -> str:
+def build_preview_message(receipts: list) -> str:
     lines = ["📋 *Результат розпізнавання:*", ""]
 
     n = len(receipts)
@@ -407,13 +370,6 @@ def build_preview_message(receipts: list, message_date: datetime) -> str:
         lines.append(f"\n*Прораб:* {data.get('foreman') or '—'}")
         if i < n:
             lines.append("")
-
-    copy_rows = build_copy_payload(receipts, message_date)
-    if copy_rows:
-        lines.append("")
-        lines.append("*Excel:*")
-        for row in copy_rows:
-            lines.append(f"`{row}`")
 
     return "\n".join(lines)
 
@@ -457,7 +413,7 @@ async def _process_buffer(user_id: int, context: ContextTypes.DEFAULT_TYPE):
             "message_date": message_date,
         }
 
-        preview = build_preview_message(receipts, _to_utc(message_date).astimezone(KYIV_TZ))
+        preview = build_preview_message(receipts)
         keyboard = _confirm_keyboard()
 
         await status_msg.delete()
@@ -744,7 +700,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state["receipts"] = new_data
             state["retry_count"] += 1
 
-            preview = build_preview_message(new_data, _to_utc(state["message_date"]).astimezone(KYIV_TZ))
+            preview = build_preview_message(new_data)
             await query.edit_message_text(preview, parse_mode="Markdown", reply_markup=_confirm_keyboard())
 
         except Exception as e:
