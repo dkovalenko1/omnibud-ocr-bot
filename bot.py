@@ -19,6 +19,20 @@ from telegram.ext import (
     filters,
 )
 from config import OPENAI_API_KEY, TELEGRAM_BOT_TOKEN
+from ledger_db import init_db
+from ledger_service import (
+    LedgerError,
+    bind_chat_account,
+    create_adjustment_transaction,
+    create_opening_balance,
+    create_receipt_transactions,
+    create_topup_transaction,
+    format_amount_kopecks,
+    format_balance_message,
+    get_balance_kopecks,
+    parse_amount_to_kopecks,
+    parse_topup_message,
+)
 from sheets_service import append_receipt
 
 load_dotenv()
@@ -374,6 +388,115 @@ def build_preview_message(receipts: list) -> str:
     return "\n".join(lines)
 
 
+def _actor_name(user) -> str:
+    parts = [user.first_name or "", user.last_name or ""]
+    full_name = " ".join(part for part in parts if part).strip()
+    return full_name or user.username or f"user-{user.id}"
+
+
+def _kyiv_message_date(message_date: datetime) -> datetime:
+    return _to_utc(message_date).astimezone(KYIV_TZ)
+
+
+async def _reply_balance(chat_id: int, context: ContextTypes.DEFAULT_TYPE, as_of: datetime):
+    balance = get_balance_kopecks(chat_id)
+    await context.bot.send_message(chat_id=chat_id, text=format_balance_message(balance, as_of))
+
+
+async def bind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    foreman_name = " ".join(context.args).strip()
+    try:
+        bind_chat_account(update.effective_chat.id, foreman_name, _kyiv_message_date(message.date))
+    except LedgerError as exc:
+        await message.reply_text(f"⚠️ {exc}")
+        return
+
+    await message.reply_text(f"✅ Чат прив'язано до прораба: {foreman_name}")
+
+
+async def opening_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    if not context.args:
+        await message.reply_text("⚠️ Використання: /opening 25000")
+        return
+
+    try:
+        amount_kopecks = parse_amount_to_kopecks(" ".join(context.args))
+        created = create_opening_balance(
+            chat_id=update.effective_chat.id,
+            amount_kopecks=amount_kopecks,
+            created_by_user_id=update.effective_user.id,
+            created_by_name=_actor_name(update.effective_user),
+            created_at=_kyiv_message_date(message.date),
+        )
+    except LedgerError as exc:
+        await message.reply_text(f"⚠️ {exc}")
+        return
+
+    if not created:
+        await message.reply_text("⚠️ Початковий залишок уже задано. Для змін використовуй /adjust.")
+        return
+
+    await message.reply_text(f"✅ Початковий залишок встановлено: {format_amount_kopecks(amount_kopecks)}")
+    await _reply_balance(update.effective_chat.id, context, _kyiv_message_date(message.date))
+
+
+async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    try:
+        await _reply_balance(update.effective_chat.id, context, _kyiv_message_date(message.date))
+    except LedgerError as exc:
+        await message.reply_text(f"⚠️ {exc}")
+
+
+async def adjust_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    body = (message.text or "").split(maxsplit=1)
+    if len(body) < 2:
+        await message.reply_text("⚠️ Використання: /adjust -500 Помилка у попередньому записі")
+        return
+
+    raw = body[1].strip()
+    parts = raw.split(maxsplit=1)
+    amount_token = parts[0]
+    note = parts[1].strip() if len(parts) > 1 else "Ручне коригування"
+
+    try:
+        amount_kopecks = parse_amount_to_kopecks(amount_token)
+        created = create_adjustment_transaction(
+            chat_id=update.effective_chat.id,
+            message_id=message.message_id,
+            amount_kopecks=amount_kopecks,
+            description=note,
+            created_by_user_id=update.effective_user.id,
+            created_by_name=_actor_name(update.effective_user),
+            created_at=_kyiv_message_date(message.date),
+        )
+    except LedgerError as exc:
+        await message.reply_text(f"⚠️ {exc}")
+        return
+
+    if not created:
+        await message.reply_text("⚠️ Це коригування вже враховано.")
+        return
+
+    await message.reply_text(f"✅ Коригування записано: {format_amount_kopecks(amount_kopecks)}")
+    await _reply_balance(update.effective_chat.id, context, _kyiv_message_date(message.date))
+
+
 # ─────────────────────────── BUFFER ───────────────────────────
 
 async def _process_buffer(user_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -465,7 +588,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`к/чек № 162681 від 26 лютого 2025 р ЕПІЦЕНТР (Товар 1; Товар 2)`\n\n"
         "Команди:\n"
         "/start — це повідомлення\n"
-        "/help — довідка"
+        "/help — довідка\n"
+        "/bind Ім'я Прізвище — прив'язати чат до прораба\n"
+        "/opening 25000 — початковий залишок\n"
+        "/balance — поточний залишок\n"
+        "/adjust -500 Корекція — ручне коригування"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -478,6 +605,12 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3. Підпис можна написати окремим повідомленням одразу після фото\n"
         "4. Я розпізнаю дані та покажу рядок для Excel\n"
         "5. Перевір результат — натисни ✅ *Зберегти* або 🔄 *Повторити розпізнавання*\n\n"
+        "*Облік підзвіту:*\n"
+        "/bind Ім'я Прізвище — налаштувати чат\n"
+        "/opening 25000 — встановити початковий залишок\n"
+        "/balance — показати поточний залишок\n"
+        "/adjust -500 Корекція — ручне коригування\n"
+        "Текст `Получил 30000` — поповнення балансу\n"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -599,6 +732,35 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
+    if user_id not in message_buffer:
+        try:
+            topup_kopecks = parse_topup_message(text)
+        except LedgerError as exc:
+            await update.message.reply_text(f"⚠️ {exc}")
+            return
+        if topup_kopecks is not None:
+            try:
+                created = create_topup_transaction(
+                    chat_id=update.effective_chat.id,
+                    message_id=update.message.message_id,
+                    amount_kopecks=topup_kopecks,
+                    description=text,
+                    created_by_user_id=user_id,
+                    created_by_name=_actor_name(update.effective_user),
+                    created_at=_kyiv_message_date(message_date),
+                )
+            except LedgerError as exc:
+                await update.message.reply_text(f"⚠️ {exc}")
+                return
+
+            if not created:
+                await update.message.reply_text("⚠️ Це поповнення вже враховано.")
+                return
+
+            await update.message.reply_text(f"✅ Поповнення записано: {format_amount_kopecks(topup_kopecks)}")
+            await _reply_balance(update.effective_chat.id, context, _kyiv_message_date(message_date))
+            return
+
     TEXT_ONLY_KEYWORDS = ("сума:", "назва об'єкту:", "пояснення:", "підстава:", "розділ:")
     is_signature = any(kw in text.lower() for kw in TEXT_ONLY_KEYWORDS)
 
@@ -638,7 +800,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "confirm":
         receipts = state["receipts"]
         # Use Kyiv local time for the sheet tab name
-        message_date_kyiv = _to_utc(state["message_date"]).astimezone(KYIV_TZ)
+        message_date_kyiv = _kyiv_message_date(state["message_date"])
         tab_name = message_date_kyiv.strftime("%d.%m.%Y")
 
         await query.edit_message_text("💾 Зберігаю в Google Sheets...")
@@ -646,6 +808,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             sheet_url = None
             saved_lines = []
+            balance_note = ""
             for data in receipts:
                 excel_str = build_excel_string(data)
                 total = data.get("total") or 0
@@ -663,6 +826,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f" — *{total} грн* ({object_name})"
                 )
 
+            try:
+                inserted = create_receipt_transactions(
+                    chat_id=update.effective_chat.id,
+                    message_id=query.message.message_id,
+                    receipts=receipts,
+                    description=state["caption"],
+                    created_by_user_id=query.from_user.id,
+                    created_by_name=_actor_name(query.from_user),
+                    created_at=message_date_kyiv,
+                )
+                if inserted:
+                    balance_note = "\n\n" + format_balance_message(
+                        get_balance_kopecks(update.effective_chat.id),
+                        message_date_kyiv,
+                    )
+                else:
+                    balance_note = "\n\n⚠️ Баланс не оновлено: ця витрата вже врахована."
+            except LedgerError as exc:
+                balance_note = f"\n\n⚠️ Баланс не оновлено: {exc}"
+
             saved_text = "\n".join(saved_lines)
             count = len(receipts)
             text = (
@@ -670,6 +853,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📅 Сторінка: `{tab_name}`\n\n"
                 f"{saved_text}\n\n"
                 f"[Відкрити таблицю]({sheet_url})"
+                f"{balance_note}"
             )
             await query.edit_message_text(text, parse_mode="Markdown", disable_web_page_preview=True)
             del pending[user_id]
@@ -721,11 +905,16 @@ async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     logging.basicConfig(level=logging.WARNING)
+    init_db()
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("bind", bind_cmd))
+    app.add_handler(CommandHandler("opening", opening_cmd))
+    app.add_handler(CommandHandler("balance", balance_cmd))
+    app.add_handler(CommandHandler("adjust", adjust_cmd))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

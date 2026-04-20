@@ -12,6 +12,9 @@ env/
 
 # Logs
 *.log
+data/
+*.db
+*.sqlite3
 
 # IDE
 .idea/
