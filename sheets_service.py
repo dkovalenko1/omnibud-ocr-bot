@@ -8,6 +8,20 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+HEADERS = [
+    "№",
+    "Найменування матеріала",
+    "Об'єкт",
+    "Дата",
+    "К-сть",
+    "Ціна",
+    "Вартість",
+    "Підстава",
+    "Пояснення",
+    "Розділ",
+    "Прораб",
+]
+
 # ─────────────────────────── CONNECTION ───────────────────────────
 
 def get_sheet():
@@ -18,22 +32,25 @@ def get_sheet():
 
 # ─────────────────────────── SHEET PER DAY ───────────────────────────
 
+def ensure_header_row(ws):
+    actual = ws.row_values(1)
+    actual = actual[:len(HEADERS)] + [""] * max(0, len(HEADERS) - len(actual))
+    if actual != HEADERS:
+        ws.update("A1:K1", [HEADERS], value_input_option="USER_ENTERED")
+    ws.format("A1:K1", {"textFormat": {"bold": True}})
+
 def get_or_create_day_sheet(spreadsheet, date: datetime):
     tab_name = date.strftime("%d.%m.%Y")
 
     existing = [ws.title for ws in spreadsheet.worksheets()]
     if tab_name in existing:
-        return spreadsheet.worksheet(tab_name)
+        ws = spreadsheet.worksheet(tab_name)
+        ensure_header_row(ws)
+        return ws
 
     # Columns: №, Найменування, Об'єкт, Дата, К-сть, Ціна, Вартість, Підстава, Пояснення, Розділ, Прораб
     ws = spreadsheet.add_worksheet(title=tab_name, rows=200, cols=11)
-    ws.append_row(
-        ["№", "Найменування матеріала", "Об'єкт", "Дата", "К-сть", "Ціна", "Вартість",
-         "Підстава", "Пояснення", "Розділ", "Прораб"],
-        value_input_option="USER_ENTERED",
-    )
-    ws.format("A1:K1", {"textFormat": {"bold": True}})
-
+    ensure_header_row(ws)
     return ws
 
 
@@ -51,6 +68,7 @@ def append_receipt(
 ) -> str:
     spreadsheet = get_sheet()
     ws = get_or_create_day_sheet(spreadsheet, message_date)
+    ensure_header_row(ws)
 
     all_values = ws.get_all_values()
     next_row = len(all_values) + 1
