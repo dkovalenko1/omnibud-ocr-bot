@@ -64,10 +64,36 @@ def bind_chat_account(chat_id: int, foreman_name: str, opened_at: datetime):
         )
 
 
+def unbind_chat_account(chat_id: int) -> str:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            select foreman_name
+            from chat_accounts
+            where chat_id = ? and is_active = 1
+            """,
+            (chat_id,),
+        ).fetchone()
+        if not row:
+            raise LedgerError("Для цього чату немає активної прив'язки.")
+
+        conn.execute(
+            """
+            update chat_accounts
+            set is_active = 0
+            where chat_id = ?
+            """,
+            (chat_id,),
+        )
+    return row["foreman_name"]
+
+
 def require_chat_account(chat_id: int):
     account = get_chat_account(chat_id)
     if not account:
         raise LedgerError("Для цього чату ще не налаштовано облік. Виконай /bind Ім'я_Прораба.")
+    if not account["is_active"]:
+        raise LedgerError("Для цього чату облік вимкнено. Виконай /bind Ім'я_Прораба.")
     return account
 
 

@@ -23,6 +23,7 @@ from ledger_db import init_db
 from ledger_service import (
     LedgerError,
     bind_chat_account,
+    unbind_chat_account,
     create_adjustment_transaction,
     create_opening_balance,
     create_receipt_transactions,
@@ -448,6 +449,20 @@ async def opening_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _reply_balance(update.effective_chat.id, context, _kyiv_message_date(message.date))
 
 
+async def unbind_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    try:
+        foreman_name = unbind_chat_account(update.effective_chat.id)
+    except LedgerError as exc:
+        await message.reply_text(f"⚠️ {exc}")
+        return
+
+    await message.reply_text(f"✅ Облік для чату вимкнено. Було прив'язано: {foreman_name}")
+
+
 async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
@@ -590,6 +605,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start — це повідомлення\n"
         "/help — довідка\n"
         "/bind Ім'я Прізвище — прив'язати чат до прораба\n"
+        "/unbind — вимкнути облік для цього чату\n"
         "/opening 25000 — початковий залишок\n"
         "/balance — поточний залишок\n"
         "/adjust -500 Корекція — ручне коригування"
@@ -607,6 +623,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "5. Перевір результат — натисни ✅ *Зберегти* або 🔄 *Повторити розпізнавання*\n\n"
         "*Облік підзвіту:*\n"
         "/bind Ім'я Прізвище — налаштувати чат\n"
+        "/unbind — вимкнути облік для цього чату\n"
         "/opening 25000 — встановити початковий залишок\n"
         "/balance — показати поточний залишок\n"
         "/adjust -500 Корекція — ручне коригування\n"
@@ -912,6 +929,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("bind", bind_cmd))
+    app.add_handler(CommandHandler("unbind", unbind_cmd))
     app.add_handler(CommandHandler("opening", opening_cmd))
     app.add_handler(CommandHandler("balance", balance_cmd))
     app.add_handler(CommandHandler("adjust", adjust_cmd))
