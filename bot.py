@@ -840,7 +840,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 saved_lines.append(
                     f"• {excel_str[:60]}{'...' if len(excel_str) > 60 else ''}"
-                    f" — *{total} грн* ({object_name})"
+                    f" — {total} грн ({object_name})"
                 )
 
             try:
@@ -866,13 +866,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             saved_text = "\n".join(saved_lines)
             count = len(receipts)
             text = (
-                f"✅ *Збережено {count} {_receipt_count_word(count)}!*\n\n"
-                f"📅 Сторінка: `{tab_name}`\n\n"
+                f"✅ Збережено {count} {_receipt_count_word(count)}!\n\n"
+                f"📅 Сторінка: {tab_name}\n\n"
                 f"{saved_text}\n\n"
-                f"[Відкрити таблицю]({sheet_url})"
+                f"Відкрити таблицю: {sheet_url}"
                 f"{balance_note}"
             )
-            await query.edit_message_text(text, parse_mode="Markdown", disable_web_page_preview=True)
+            await query.edit_message_text(text, disable_web_page_preview=True)
             del pending[user_id]
             _delete_files(state["image_paths"])
 
