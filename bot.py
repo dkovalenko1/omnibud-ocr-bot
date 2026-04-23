@@ -4,6 +4,7 @@ import base64
 import tempfile
 import os
 import logging
+import html
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -838,9 +839,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     excel_str, total, message_date_kyiv, object_name,
                     basis, description, section, foreman,
                 )
+                snippet = f"{excel_str[:60]}{'...' if len(excel_str) > 60 else ''}"
                 saved_lines.append(
-                    f"• {excel_str[:60]}{'...' if len(excel_str) > 60 else ''}"
-                    f" — {total} грн ({object_name})"
+                    f"• {html.escape(snippet)}"
+                    f" — <b>{html.escape(str(total))} грн</b> ({html.escape(object_name)})"
                 )
 
             try:
@@ -865,14 +867,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             saved_text = "\n".join(saved_lines)
             count = len(receipts)
+            sheet_link = f'<a href="{html.escape(sheet_url or "", quote=True)}">Відкрити таблицю</a>'
             text = (
-                f"✅ Збережено {count} {_receipt_count_word(count)}!\n\n"
-                f"📅 Сторінка: {tab_name}\n\n"
+                f"✅ <b>Збережено {count} {_receipt_count_word(count)}!</b>\n\n"
+                f"📅 Сторінка: <code>{html.escape(tab_name)}</code>\n\n"
                 f"{saved_text}\n\n"
-                f"Відкрити таблицю: {sheet_url}"
-                f"{balance_note}"
+                f"{sheet_link}"
+                f"{html.escape(balance_note)}"
             )
-            await query.edit_message_text(text, disable_web_page_preview=True)
+            await query.edit_message_text(text, parse_mode="HTML", disable_web_page_preview=True)
             del pending[user_id]
             _delete_files(state["image_paths"])
 
