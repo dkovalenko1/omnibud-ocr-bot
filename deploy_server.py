@@ -10,6 +10,7 @@ import http.server
 import logging
 import os
 import subprocess
+import sys
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -22,6 +23,8 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 PORT = 9000
 SERVICE_NAME = "OmnibudOCR"
 LOG_FILE = os.path.join(os.path.dirname(__file__), "deploy.log")
+ROOT_DIR = os.path.dirname(__file__)
+REQUIREMENTS_FILE = os.path.join(ROOT_DIR, "requirements.txt")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -55,10 +58,24 @@ def _verify_signature(body: bytes, sig_header: str) -> bool:
 
 def _run(cmd: list[str]) -> tuple[int, str]:
     result = subprocess.run(
-        cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__)
+        cmd, capture_output=True, text=True, cwd=ROOT_DIR
     )
     output = (result.stdout + result.stderr).strip()
     return result.returncode, output
+
+
+def _python_executable() -> str:
+    candidates = [
+        os.path.join(ROOT_DIR, ".venv", "Scripts", "python.exe"),
+        os.path.join(ROOT_DIR, ".venv", "bin", "python"),
+        os.path.join(ROOT_DIR, "venv", "Scripts", "python.exe"),
+        os.path.join(ROOT_DIR, "venv", "bin", "python"),
+        sys.executable,
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return sys.executable
 
 
 class DeployHandler(http.server.BaseHTTPRequestHandler):
@@ -100,6 +117,23 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
             for line in out.splitlines()
             if "|" in line
         )
+
+        if os.path.exists(REQUIREMENTS_FILE):
+            log.info("Installing requirements")
+            code, dep_out = _run([
+                _python_executable(),
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                REQUIREMENTS_FILE,
+            ])
+            log.info("pip install (exit %d): %s", code, dep_out)
+            if code != 0:
+                log.error("Dependency install failed")
+                notify(f"Deploy FAILED — dependency install error:\n{dep_out}")
+                self._respond(500, "dependency install failed")
+                return
 
         log.info("Changes detected — restarting service %s", SERVICE_NAME)
 
