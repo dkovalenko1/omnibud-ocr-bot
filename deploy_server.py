@@ -43,8 +43,8 @@ from notify import send as notify
 def _verify_signature(body: bytes, sig_header: str) -> bool:
     """Return True if the request signature matches the secret."""
     if not WEBHOOK_SECRET:
-        log.warning("WEBHOOK_SECRET is not set — skipping signature check")
-        return True
+        log.error("WEBHOOK_SECRET is not set — rejecting webhook request")
+        return False
     if not sig_header or not sig_header.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(
@@ -140,6 +140,8 @@ class DeployHandler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if not WEBHOOK_SECRET:
+        raise RuntimeError("WEBHOOK_SECRET must be set before starting deploy_server")
     server = http.server.HTTPServer(("localhost", PORT), DeployHandler)
     log.info("Deploy server started on localhost:%d", PORT)
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Deploy server listening on localhost:{PORT}")

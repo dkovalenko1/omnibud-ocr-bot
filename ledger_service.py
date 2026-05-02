@@ -140,6 +140,49 @@ def _insert_transaction(
     return True
 
 
+def _insert_transaction_id(
+    chat_id: int,
+    source_key: str,
+    message_id: int | None,
+    source_kind: str,
+    amount_kopecks: int,
+    object_name: str | None,
+    description: str | None,
+    items_text: str | None,
+    created_by_user_id: int | None,
+    created_by_name: str | None,
+    created_at: datetime,
+    conn,
+) -> int | None:
+    try:
+        cursor = conn.execute(
+            """
+            insert into transactions(
+              chat_id, source_key, message_id, source_kind, amount_kopecks,
+              object_name, description, items_text,
+              created_by_user_id, created_by_name, created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chat_id,
+                source_key,
+                message_id,
+                source_kind,
+                amount_kopecks,
+                object_name,
+                description,
+                items_text,
+                created_by_user_id,
+                created_by_name,
+                created_at.isoformat(),
+            ),
+        )
+    except sqlite3.IntegrityError:
+        return None
+    return int(cursor.lastrowid)
+
+
 def create_opening_balance(
     chat_id: int,
     amount_kopecks: int,
@@ -252,6 +295,173 @@ def create_receipt_transactions(
     return inserted
 
 
+def ensure_receipts_can_be_saved(chat_id: int, message_id: int, receipts: list[dict]) -> None:
+    require_chat_account(chat_id)
+    if not receipts:
+        raise LedgerError("Немає чеків для збереження.")
+
+    source_keys = []
+    for idx, receipt in enumerate(receipts, 1):
+        parse_amount_to_kopecks(str(receipt.get("total") or "0"))
+        source_keys.append(f"receipt:{chat_id}:{message_id}:{idx}")
+
+    placeholders = ",".join("?" for _ in source_keys)
+    with get_connection() as conn:
+        existing = conn.execute(
+            f"""
+            select source_key
+            from transactions
+            where source_key in ({placeholders})
+            """,
+            source_keys,
+        ).fetchall()
+
+    if existing:
+        raise LedgerError("Ця витрата вже врахована.")
+
+
+def create_saved_receipt_transactions(
+    chat_id: int,
+    message_id: int,
+    receipts: list[dict],
+    sheet_records: list[dict],
+    description: str | None,
+    created_by_user_id: int | None,
+    created_by_name: str | None,
+    created_at: datetime,
+) -> list[dict]:
+    require_chat_account(chat_id)
+    if len(receipts) != len(sheet_records):
+        raise LedgerError("Кількість чеків не збігається з кількістю рядків таблиці.")
+
+    raw_description = (description or "").strip()
+    created_records = []
+
+    with get_connection() as conn:
+        for idx, (receipt, sheet_record) in enumerate(zip(receipts, sheet_records), 1):
+            total_kopecks = parse_amount_to_kopecks(str(receipt.get("total") or "0"))
+            items = receipt.get("items") or []
+            items_text = "; ".join(str(item) for item in items) or None
+            source_key = f"receipt:{chat_id}:{message_id}:{idx}"
+            tx_description = raw_description or receipt.get("description") or "Витрата за чеком"
+
+            tx_id = _insert_transaction_id(
+                chat_id=chat_id,
+                source_key=source_key,
+                message_id=message_id,
+                source_kind="receipt",
+                amount_kopecks=-total_kopecks,
+                object_name=receipt.get("object_name") or None,
+                description=tx_description,
+                items_text=items_text,
+                created_by_user_id=created_by_user_id,
+                created_by_name=created_by_name,
+                created_at=created_at,
+                conn=conn,
+            )
+            if tx_id is None:
+                continue
+
+            cursor = conn.execute(
+                """
+                insert into saved_receipts(
+                  chat_id, source_message_id, receipt_index, sheet_tab, sheet_row,
+                  ledger_transaction_id, status, created_at
+                )
+                values (?, ?, ?, ?, ?, ?, 'saved', ?)
+                """,
+                (
+                    chat_id,
+                    message_id,
+                    idx,
+                    str(sheet_record["tab"]),
+                    int(sheet_record["row"]),
+                    tx_id,
+                    created_at.isoformat(),
+                ),
+            )
+            created_records.append(
+                {
+                    "saved_receipt_id": int(cursor.lastrowid),
+                    "receipt_index": idx,
+                    "ledger_transaction_id": tx_id,
+                    "sheet_tab": str(sheet_record["tab"]),
+                    "sheet_row": int(sheet_record["row"]),
+                }
+            )
+
+    return created_records
+
+
+def undo_saved_receipt(
+    saved_receipt_id: int,
+    undone_by_user_id: int | None,
+    undone_by_name: str | None,
+    undone_at: datetime,
+) -> dict:
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            select
+              sr.id, sr.chat_id, sr.receipt_index, sr.sheet_tab, sr.sheet_row,
+              sr.ledger_transaction_id, sr.status, t.amount_kopecks
+            from saved_receipts sr
+            join transactions t on t.id = sr.ledger_transaction_id
+            where sr.id = ?
+            """,
+            (saved_receipt_id,),
+        ).fetchone()
+        if not row:
+            raise LedgerError("Не знайдено збережений чек для скасування.")
+
+        result = {
+            "saved_receipt_id": row["id"],
+            "chat_id": row["chat_id"],
+            "receipt_index": row["receipt_index"],
+            "sheet_tab": row["sheet_tab"],
+            "sheet_row": row["sheet_row"],
+            "ledger_transaction_id": row["ledger_transaction_id"],
+            "amount_kopecks": row["amount_kopecks"],
+            "already_undone": row["status"] == "undone",
+        }
+        if row["status"] == "undone":
+            return result
+
+        conn.execute(
+            """
+            update saved_receipts
+            set status = 'undone',
+                undone_at = ?,
+                undone_by_user_id = ?,
+                undone_by_name = ?
+            where id = ?
+            """,
+            (
+                undone_at.isoformat(),
+                undone_by_user_id,
+                undone_by_name,
+                saved_receipt_id,
+            ),
+        )
+        conn.execute(
+            """
+            update transactions
+            set voided_at = ?,
+                voided_by_user_id = ?,
+                voided_by_name = ?
+            where id = ?
+            """,
+            (
+                undone_at.isoformat(),
+                undone_by_user_id,
+                undone_by_name,
+                row["ledger_transaction_id"],
+            ),
+        )
+
+    return result
+
+
 def get_balance_kopecks(chat_id: int) -> int:
     require_chat_account(chat_id)
     with get_connection() as conn:
@@ -259,7 +469,7 @@ def get_balance_kopecks(chat_id: int) -> int:
             """
             select coalesce(sum(amount_kopecks), 0) as balance_kopecks
             from transactions
-            where chat_id = ?
+            where chat_id = ? and voided_at is null
             """,
             (chat_id,),
         ).fetchone()["balance_kopecks"]
