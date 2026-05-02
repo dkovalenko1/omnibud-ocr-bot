@@ -1,15 +1,77 @@
 import base64
 import json
+import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 from config import OPENAI_API_KEY
+from time_utils import kyiv_message_date
 
 
 MAX_IMAGES = 10
+OCR_MODEL = "gpt-5.4"
+OCR_RETRY_REASONING_EFFORT = "high"
+PRICE_PER_MILLION_TOKENS = {
+    "gpt-5.2": {"input": 1.75, "output": 14.00},
+    "gpt-5": {"input": 1.25, "output": 10.00},
+    "gpt-5.4": {"input": 2.50, "output": 15.00},
+    "gpt-5.5": {"input": 5.00, "output": 30.00},
+}
+RECEIPT_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "receipt_extraction",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "receipts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "doc_type": {"type": ["string", "null"]},
+                            "doc_number": {"type": ["string", "null"]},
+                            "date": {"type": ["string", "null"]},
+                            "vendor": {"type": ["string", "null"]},
+                            "items": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "total": {"type": ["number", "null"]},
+                            "object_name": {"type": ["string", "null"]},
+                            "basis": {"type": ["string", "null"]},
+                            "description": {"type": ["string", "null"]},
+                            "section": {"type": ["string", "null"]},
+                            "foreman": {"type": ["string", "null"]},
+                        },
+                        "required": [
+                            "doc_type",
+                            "doc_number",
+                            "date",
+                            "vendor",
+                            "items",
+                            "total",
+                            "object_name",
+                            "basis",
+                            "description",
+                            "section",
+                            "foreman",
+                        ],
+                    },
+                },
+            },
+            "required": ["receipts"],
+        },
+    },
+}
 
+log = logging.getLogger(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 SYSTEM_PROMPT = """Ти — асистент бухгалтера будівельної компанії. Твоя задача — розпізнати дані з фото чека або іншого документа та повернути ТІЛЬКИ валідний JSON без будь-якого додаткового тексту.
@@ -119,6 +181,58 @@ def encode_image(path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
+def _developer_message(content: str) -> dict:
+    return {"role": "developer", "content": content}
+
+
+def _today_kyiv_iso() -> str:
+    return kyiv_message_date(datetime.now(timezone.utc)).date().isoformat()
+
+
+def _text_receipt_prompt(text: str) -> str:
+    today = _today_kyiv_iso()
+    return (
+        "Користувач надіслав текстовий запис витрати без фото документу. "
+        "Розпізнай поля з тексту. Для doc_type використай 'витрата', doc_number — 'б/н', "
+        f"date — {today}, якщо дата не вказана. "
+        "Слідкуй всім правилам.\n\n"
+        f"Текст:\n{text}"
+    )
+
+
+def _create_chat_completion(
+    *,
+    messages: list,
+    max_completion_tokens: int,
+    reasoning_effort: str | None = None,
+):
+    request = {
+        "model": OCR_MODEL,
+        "response_format": RECEIPT_RESPONSE_FORMAT,
+        "messages": messages,
+        "max_completion_tokens": max_completion_tokens,
+    }
+    if reasoning_effort:
+        request["extra_body"] = {"reasoning_effort": reasoning_effort}
+
+    try:
+        return client.chat.completions.create(**request)  # type: ignore[arg-type]
+    except OpenAIError:
+        log.exception(
+            "OpenAI receipt recognition request failed: model=%s reasoning_effort=%s",
+            OCR_MODEL,
+            reasoning_effort,
+        )
+        raise
+    except Exception:
+        log.exception(
+            "Unexpected receipt recognition request failure: model=%s reasoning_effort=%s",
+            OCR_MODEL,
+            reasoning_effort,
+        )
+        raise
+
+
 def pdf_to_images(pdf_path: str) -> list[str]:
     """Convert PDF pages to JPEG temp files. Returns list of file paths."""
     try:
@@ -173,35 +287,31 @@ def extract_receipt_data(image_paths: list[str], caption: str = "", retry: bool 
         })
 
     messages: list = [
-        {"role": "system", "content": system},
+        _developer_message(system),
         {"role": "user", "content": content},
     ]
 
-    model = "gpt-5.4"
     max_tokens = 3300 if not retry else 4000
 
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},  # type: ignore
+    reasoning_effort = OCR_RETRY_REASONING_EFFORT if retry else None
+    response = _create_chat_completion(
         messages=messages,
         max_completion_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
     )
 
     usage = response.usage
     if usage:
-        price = {
-            "gpt-5.2": {"input": 1.75, "output": 14.00},
-            "gpt-5": {"input": 1.25, "output": 10.00},
-            "gpt-5.4": {"input": 2.50, "output": 15.00},
-        }
-        p = price[model]
+        p = PRICE_PER_MILLION_TOKENS[OCR_MODEL]
         cost_in = usage.prompt_tokens / 1_000_000 * p["input"]
         cost_out = usage.completion_tokens / 1_000_000 * p["output"]
         cost = cost_in + cost_out
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens = getattr(completion_details, "reasoning_tokens", 0) or 0
         print(
-            f"[tokens] model={model} | "
+            f"[tokens] model={OCR_MODEL} | "
             f"in={usage.prompt_tokens} out={usage.completion_tokens} "
-            f"total={usage.total_tokens} | "
+            f"reasoning={reasoning_tokens} total={usage.total_tokens} | "
             f"cost=${cost:.5f} (in=${cost_in:.5f} out=${cost_out:.5f})"
         )
 
@@ -218,24 +328,13 @@ def extract_receipt_data(image_paths: list[str], caption: str = "", retry: bool 
 def parse_text_receipt(text: str) -> list:
     """Parse a text-only message (foreman signature without a photo) into receipts."""
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        _developer_message(SYSTEM_PROMPT),
         {
             "role": "user",
-            "content": (
-                "Користувач надіслав текстовий запис витрати без фото документу. "
-                "Розпізнай поля з тексту. Для doc_type використай 'витрата', doc_number — 'б/н', "
-                "date — сьогоднішня дата якщо не вказано. "
-                "Слідкуй всім правилам.\n\n"
-                f"Текст:\n{text}"
-            ),
+            "content": _text_receipt_prompt(text),
         },
     ]
-    response = client.chat.completions.create(
-        model="gpt-5.4",
-        response_format={"type": "json_object"},  # type: ignore
-        messages=messages,
-        max_completion_tokens=2000,
-    )
+    response = _create_chat_completion(messages=messages, max_completion_tokens=2000)
     content_str = response.choices[0].message.content
     if not content_str:
         raise ValueError("AI повернув порожню відповідь.")
