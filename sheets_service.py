@@ -118,6 +118,5 @@ def mark_receipt_canceled(sheet_tab: str, sheet_row: int):
         f"A{sheet_row}:L{sheet_row}",
         {
             "backgroundColor": {"red": 1.0, "green": 0.82, "blue": 0.82},
-            "textFormat": {"strikethrough": True},
         },
     )

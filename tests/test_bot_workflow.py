@@ -31,6 +31,40 @@ class FakeBot:
         self.messages.append(kwargs)
 
 
+class FakeCallbackMessage:
+    def __init__(self, reply_markup):
+        self.text_html = (
+            "✅ <b>Збережено 1 чек!</b>\n\n"
+            "📅 Сторінка: <code>02.05.2026</code>\n\n"
+            "• к/чек № 1 — <b>145 грн</b> (Об'єкт)"
+        )
+        self.reply_markup = reply_markup
+
+
+class FakeCallbackQuery:
+    def __init__(self, data, reply_markup):
+        self.data = data
+        self.from_user = SimpleNamespace(
+            id=9,
+            first_name="Accountant",
+            last_name="",
+            username="accountant",
+        )
+        self.message = FakeCallbackMessage(reply_markup)
+        self.answers = []
+        self.edited_texts = []
+        self.edited_reply_markups = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+
+    async def edit_message_text(self, *args, **kwargs):
+        self.edited_texts.append((args, kwargs))
+
+    async def edit_message_reply_markup(self, *args, **kwargs):
+        self.edited_reply_markups.append((args, kwargs))
+
+
 class BotWorkflowTests(unittest.TestCase):
     def test_preview_message_escapes_model_text_for_html(self):
         import bot
@@ -122,6 +156,77 @@ class BotAsyncWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(calls)
         self.assertEqual(bot.pending[1]["source_kind"], "text")
         self.assertEqual(context.bot.messages[0]["parse_mode"], "HTML")
+
+    async def test_undo_edits_saved_message_text(self):
+        import bot
+
+        undone = {
+            "chat_id": 123,
+            "receipt_index": 1,
+            "sheet_tab": "02.05.2026",
+            "sheet_row": 3,
+            "already_undone": False,
+        }
+
+        async def fake_to_thread(func, *args, **kwargs):
+            if func is bot.undo_saved_receipt:
+                return undone
+            if func is bot.mark_receipt_canceled:
+                return None
+            if func is bot.get_balance_kopecks:
+                return 54_432_00
+            raise AssertionError(f"unexpected to_thread call: {func}")
+
+        reply_markup = bot._undo_keyboard([{"receipt_index": 1, "saved_receipt_id": 7}])
+        query = FakeCallbackQuery("undo_receipt:7", reply_markup)
+        update = SimpleNamespace(callback_query=query, effective_user=query.from_user)
+        context = SimpleNamespace(bot=FakeBot())
+
+        with patch.object(bot.asyncio, "to_thread", new=fake_to_thread):
+            await bot.handle_callback(update, context)
+
+        self.assertEqual(len(query.edited_texts), 1)
+        self.assertEqual(query.edited_reply_markups, [])
+        _, kwargs = query.edited_texts[0]
+        self.assertIn("СКАСОВАНО", kwargs["text"])
+        self.assertIn("Чек 1", kwargs["text"])
+        self.assertNotIn("Збережено", kwargs["text"])
+        self.assertEqual(kwargs["parse_mode"], "HTML")
+        self.assertIsNone(kwargs["reply_markup"])
+
+    async def test_undo_removes_only_canceled_button_when_other_receipts_remain(self):
+        import bot
+
+        undone = {
+            "chat_id": 123,
+            "receipt_index": 1,
+            "sheet_tab": "02.05.2026",
+            "sheet_row": 3,
+            "already_undone": True,
+        }
+
+        async def fake_to_thread(func, *args, **kwargs):
+            if func is bot.undo_saved_receipt:
+                return undone
+            if func is bot.mark_receipt_canceled:
+                return None
+            raise AssertionError(f"unexpected to_thread call: {func}")
+
+        reply_markup = bot._undo_keyboard([
+            {"receipt_index": 1, "saved_receipt_id": 7},
+            {"receipt_index": 2, "saved_receipt_id": 8},
+        ])
+        query = FakeCallbackQuery("undo_receipt:7", reply_markup)
+        update = SimpleNamespace(callback_query=query, effective_user=query.from_user)
+        context = SimpleNamespace(bot=FakeBot())
+
+        with patch.object(bot.asyncio, "to_thread", new=fake_to_thread):
+            await bot.handle_callback(update, context)
+
+        _, kwargs = query.edited_texts[0]
+        remaining = kwargs["reply_markup"].inline_keyboard
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0][0].callback_data, "undo_receipt:8")
 
 
 if __name__ == "__main__":

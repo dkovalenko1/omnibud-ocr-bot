@@ -302,10 +302,9 @@ def _undo_keyboard(saved_receipts: list[dict]) -> InlineKeyboardMarkup | None:
     ])
 
 
-def _mark_undo_button_done(
+def _remove_undo_button(
     keyboard: InlineKeyboardMarkup | None,
     callback_data: str,
-    receipt_index: int,
 ) -> InlineKeyboardMarkup | None:
     if not keyboard:
         return None
@@ -314,17 +313,34 @@ def _mark_undo_button_done(
     for row in keyboard.inline_keyboard:
         buttons = []
         for button in row:
-            if button.callback_data == callback_data:
-                buttons.append(
-                    InlineKeyboardButton(
-                        f"✅ Чек {receipt_index} скасовано",
-                        callback_data="noop",
-                    )
-                )
-            else:
+            if button.callback_data != callback_data:
                 buttons.append(button)
-        rows.append(buttons)
-    return InlineKeyboardMarkup(rows)
+        if buttons:
+            rows.append(buttons)
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+def _saved_message_html(message) -> str:
+    text_html = getattr(message, "text_html", None)
+    if text_html:
+        return text_html
+    return html.escape(getattr(message, "text", "") or "", quote=False)
+
+
+def _remove_saved_status_line(text: str) -> str:
+    lines = text.splitlines()
+    filtered = [line for line in lines if "Збережено" not in line]
+    while filtered and not filtered[0].strip():
+        filtered.pop(0)
+    return "\n".join(filtered)
+
+
+def _build_undone_message_text(message, receipt_index: int) -> str:
+    notice = f"❌ <b>СКАСОВАНО: Чек {receipt_index}</b>"
+    current_text = _remove_saved_status_line(_saved_message_html(message))
+    if f"СКАСОВАНО: Чек {receipt_index}" in current_text:
+        return current_text
+    return f"{notice}\n\n{current_text}"
 
 
 # ─────────────────────────── HANDLERS ───────────────────────────
@@ -568,12 +584,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await context.bot.send_message(chat_id=undone["chat_id"], text=balance_text)
 
-            new_keyboard = _mark_undo_button_done(
+            new_keyboard = _remove_undo_button(
                 query.message.reply_markup,
                 query.data,
-                undone["receipt_index"],
             )
-            await query.edit_message_reply_markup(reply_markup=new_keyboard)
+            await query.edit_message_text(
+                text=_build_undone_message_text(query.message, undone["receipt_index"]),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=new_keyboard,
+            )
             await query.answer("Чек скасовано")
         except Exception as exc:
             await query.answer(f"Помилка скасування: {exc}", show_alert=True)

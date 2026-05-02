@@ -101,6 +101,7 @@ class SheetsServiceTests(unittest.TestCase):
 
         self.assertEqual(ws.updated_cells, [(5, 12, "СКАСОВАНО")])
         self.assertEqual(ws.formatted[-1][0], "A5:L5")
+        self.assertNotIn("strikethrough", ws.formatted[-1][1].get("textFormat", {}))
 
     def test_append_receipt_escapes_formula_like_text_fields(self):
         import sheets_service
