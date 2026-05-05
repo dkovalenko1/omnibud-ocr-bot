@@ -25,14 +25,22 @@ def format_date_ua(date_str: str) -> str:
         return date_str or "—"
 
 
+def _text_or_default(value, default: str = "—") -> str:
+    if value in (None, ""):
+        return default
+    return str(value)
+
+
 def build_excel_string(data: dict) -> str:
-    doc_type = data.get("doc_type", "к/чек")
-    doc_number = data.get("doc_number", "б/н")
-    date_ua = format_date_ua(data.get("date", ""))
-    vendor = data.get("vendor", "")
+    doc_type = _text_or_default(data.get("doc_type"), "к/чек")
+    doc_number = _text_or_default(data.get("doc_number"), "б/н")
+    date_ua = format_date_ua(data.get("date") or "")
+    vendor = _text_or_default(data.get("vendor"), "")
     items = data.get("items", [])
 
-    result = f"{doc_type} № {doc_number} від {date_ua} {vendor}"
+    result = f"{doc_type} № {doc_number} від {date_ua}"
+    if vendor:
+        result += f" {vendor}"
     if items:
         result += f" ({'; '.join(str(item) for item in items)})"
 
